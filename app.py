@@ -1,18 +1,43 @@
-writefile app.py
 import streamlit as st
 import joblib
 from scipy.optimize import linprog
 import matplotlib.pyplot as plt
+
+# NEW IMPORTS
+import requests
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
 
 # Load ML model
 model = joblib.load("crop_model.pkl")
 
 # Crop mapping
 crop_map = {
-    0: "Bajra 🌱",
-    1: "Rice 🌾",
-    2: "Wheat 🌿"
+    0: "Bajra 🌱",
+    1: "Rice 🌾",
+    2: "Wheat 🌿"
 }
+
+# -------------------------
+# PRICE PREDICTION FUNCTION
+# -------------------------
+def predict_price(df):
+    df = df[['arrival_date', 'modal_price']].dropna()
+
+    if len(df) < 5:
+        return []
+
+    df['day'] = np.arange(len(df))
+
+    X = df[['day']]
+    y = df['modal_price']
+
+    model_lr = LinearRegression()
+    model_lr.fit(X, y)
+
+    future_days = np.array([[len(df)+i] for i in range(7)])
+    return model_lr.predict(future_days)
 
 # Page setup
 st.set_page_config(page_title="Smart Crop AI", layout="centered")
@@ -31,12 +56,12 @@ st.markdown("---")
 col1, col2 = st.columns(2)
 
 with col1:
-    soil = st.slider("🌱 Soil Moisture", 0, 100, 50)
-    rain = st.slider("🌧 Rainfall", 0, 300, 100)
+    soil = st.slider("🌱 Soil Moisture", 0, 100, 50)
+    rain = st.slider("🌧 Rainfall", 0, 300, 100)
 
 with col2:
-    temp = st.slider("🌡 Temperature", 0, 50, 25)
-    land = st.number_input("🌍 Total Land (hectares)", value=100)
+    temp = st.slider("🌡 Temperature", 0, 50, 25)
+    land = st.number_input("🌍 Total Land (hectares)", value=100)
 
 st.markdown("---")
 
@@ -45,85 +70,129 @@ st.markdown("---")
 # -------------------------
 if st.button("🚀 Predict Crop"):
 
-    pred = model.predict([[soil, temp, rain]])[0]
-    crop = crop_map.get(pred, "Unknown")
+    pred = model.predict([[soil, temp, rain]])[0]
+    crop = crop_map.get(pred, "Unknown")
 
-    st.success(f"🌾 Recommended Crop: {crop}")
+    st.success(f"🌾 Recommended Crop: {crop}")
 
 st.markdown("---")
 
 # -------------------------
-# OPTIMIZATION (BALANCED)
+# OPTIMIZATION
 # -------------------------
 if st.button("📊 Optimize Land"):
 
-    pred = model.predict([[soil, temp, rain]])[0]
+    pred = model.predict([[soil, temp, rain]])[0]
 
-    # Profit per hectare (₹)
-    profit = [20000, 30000, 25000]
+    profit = [20000, 30000, 25000]
+    cost = [8000, 12000, 10000]
+    net_profit = [p - c for p, c in zip(profit, cost)]
 
-    # Cost per hectare (₹)
-    cost = [8000, 12000, 10000]
+    c = [-x for x in net_profit]
 
-    # Net profit
-    net_profit = [p - c for p, c in zip(profit, cost)]
+    water = [2, 5, 3]
+    demand = [land * 0.5, land * 0.6, land * 0.5]
 
-    # Convert to minimization
-    c = [-x for x in net_profit]
+    A = [
+        [1, 1, 1],
+        water
+    ]
 
-    # Water usage (units)
-    water = [2, 5, 3]
+    b = [
+        land,
+        300
+    ]
 
-    # Max demand (hectares limit)
-    demand = [land * 0.5, land * 0.6, land * 0.5]
+    bounds = [
+        (land*0.1, demand[0]),
+        (land*0.1, demand[1]),
+        (land*0.1, demand[2])
+    ]
 
-    # Constraints
-    A = [
-        [1, 1, 1],     # total land
-        water          # water constraint
-    ]
+    c[pred] -= 2000
 
-    b = [
-        land,
-        300            # water limit
-    ]
+    res = linprog(c, A_ub=A, b_ub=b, bounds=bounds)
 
-    # Bounds (realistic farming)
-    bounds = [
-        (land*0.1, demand[0]),
-        (land*0.1, demand[1]),
-        (land*0.1, demand[2])
-    ]
+    x = res.x
+    bajra, rice, wheat = x
 
-    # ML boost
-    c[pred] -= 2000
+    st.success("💰 Profit Optimized Allocation:")
 
-    res = linprog(c, A_ub=A, b_ub=b, bounds=bounds)
+    st.write(f"🌱 Bajra: {round(bajra,2)} ha")
+    st.write(f"🌾 Rice: {round(rice,2)} ha")
+    st.write(f"🌿 Wheat: {round(wheat,2)} ha")
 
-    x = res.x
-    bajra, rice, wheat = x
+    total_profit = (
+        bajra * net_profit[0] +
+        rice * net_profit[1] +
+        wheat * net_profit[2]
+    )
 
-    st.success("💰 Profit Optimized Allocation:")
+    st.metric("💰 Estimated Profit", f"₹ {int(total_profit)}")
 
-    st.write(f"🌱 Bajra: {round(bajra,2)} ha")
-    st.write(f"🌾 Rice: {round(rice,2)} ha")
-    st.write(f"🌿 Wheat: {round(wheat,2)} ha")
+    crops = ["Bajra", "Rice", "Wheat"]
+    values = [bajra, rice, wheat]
 
-    total_profit = (
-        bajra * net_profit[0] +
-        rice * net_profit[1] +
-        wheat * net_profit[2]
-    )
+    fig, ax = plt.subplots()
+    ax.bar(crops, values)
+    ax.set_title("Optimal Allocation")
 
-    st.metric("💰 Estimated Profit", f"₹ {int(total_profit)}")
+    st.pyplot(fig)
 
-    # Bar chart
-    import matplotlib.pyplot as plt
-    crops = ["Bajra", "Rice", "Wheat"]
-    values = [bajra, rice, wheat]
+# -------------------------
+# MANDI PRICE SECTION
+# -------------------------
+st.markdown("---")
+st.header("📊 Live Mandi Price & Prediction")
 
-    fig, ax = plt.subplots()
-    ax.bar(crops, values)
-    ax.set_title("Optimal Allocation")
+API_KEY = "579b464db66ec23bdd0000018ebe52ae7ee2422652ff60fe57d186f1"
 
-    st.pyplot(fig)
+@st.cache_data
+def load_data():
+    url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&limit=1000"
+    data = requests.get(url).json()
+    return pd.DataFrame(data['records'])
+
+df = load_data()
+df = df.dropna()
+
+# State
+states = sorted(df['state'].unique())
+state = st.selectbox("🌍 Select State", states)
+
+df_state = df[df['state'] == state]
+
+# Mandi
+mandis = sorted(df_state['market'].unique())
+mandi = st.selectbox("🏙 Select Mandi", mandis)
+
+df_mandi = df_state[df_state['market'] == mandi]
+
+# Crop
+crops = sorted(df_mandi['commodity'].unique())
+crop = st.selectbox("🌾 Select Crop", crops)
+
+df_final = df_mandi[df_mandi['commodity'] == crop]
+
+if df_final.empty:
+    st.warning("No data available for this selection")
+else:
+    st.subheader("💰 Current Prices")
+    st.dataframe(df_final[['commodity', 'min_price', 'max_price', 'modal_price']])
+
+    df_final['arrival_date'] = pd.to_datetime(df_final['arrival_date'])
+    df_final['modal_price'] = pd.to_numeric(df_final['modal_price'], errors='coerce')
+    df_final = df_final.sort_values('arrival_date')
+
+    st.subheader("📈 Price Trend")
+    st.line_chart(df_final.set_index('arrival_date')['modal_price'])
+
+    predictions = predict_price(df_final)
+
+    st.subheader("🔮 Price Prediction (Next 7 Days)")
+
+    if len(predictions) == 0:
+        st.warning("Not enough data for prediction")
+    else:
+        for i, price in enumerate(predictions):
+            st.metric(label=f"Day {i+1}", value=f"₹ {round(price,2)}")
