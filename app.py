@@ -1,175 +1,129 @@
+writefile app.py
 import streamlit as st
-import requests
-import pandas as pd
-import numpy as np
+import joblib
+from scipy.optimize import linprog
 import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
-from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="Mandi AI", layout="centered")
+# Load ML model
+model = joblib.load("crop_model.pkl")
 
-st.title("🌾 Smart Mandi Price Analysis")
+# Crop mapping
+crop_map = {
+    0: "Bajra 🌱",
+    1: "Rice 🌾",
+    2: "Wheat 🌿"
+}
 
-# -------------------------
-# OPTION SELECT
-# -------------------------
-option = st.radio("Select Data Source", [
-    "📡 API (data.gov)",
-    "⚡ Smart Auto (Recommended)",
-    "🌐 Live Scraping (Experimental)"
-])
+# Page setup
+st.set_page_config(page_title="Smart Crop AI", layout="centered")
 
 # -------------------------
-# LOAD API DATA
+# HEADER
 # -------------------------
-API_KEY = "579b464db66ec23bdd0000018ebe52ae7ee2422652ff60fe57d186f1"
+st.markdown("<h1 style='text-align: center; color: green;'>🌾 Smart Crop AI</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>AI + Optimization System</p>", unsafe_allow_html=True)
 
-@st.cache_data
-def load_api():
-    url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&limit=10000"
-    try:
-        res = requests.get(url, timeout=10)
-        data = res.json()
-        return pd.DataFrame(data.get('records', []))
-    except:
-        return pd.DataFrame()
+st.markdown("---")
 
 # -------------------------
-# SCRAPING (LIVE)
+# INPUTS
 # -------------------------
-@st.cache_data
-def load_scrape():
-    try:
-        url = "https://agmarknet.gov.in/SearchCmmMkt.aspx"
-        res = requests.get(url)
-        soup = BeautifulSoup(res.text, "html.parser")
+col1, col2 = st.columns(2)
 
-        tables = soup.find_all("table")
-        data = []
+with col1:
+    soil = st.slider("🌱 Soil Moisture", 0, 100, 50)
+    rain = st.slider("🌧 Rainfall", 0, 300, 100)
 
-        for table in tables:
-            rows = table.find_all("tr")
-            for row in rows:
-                cols = row.find_all("td")
-                if len(cols) > 5:
-                    data.append([c.text.strip() for c in cols])
+with col2:
+    temp = st.slider("🌡 Temperature", 0, 50, 25)
+    land = st.number_input("🌍 Total Land (hectares)", value=100)
 
-        df = pd.DataFrame(data)
-        return df
-    except:
-        return pd.DataFrame()
+st.markdown("---")
 
 # -------------------------
-# DATA LOAD LOGIC
+# ML PREDICTION
 # -------------------------
-if option == "📡 API (data.gov)":
-    df = load_api()
+if st.button("🚀 Predict Crop"):
 
-elif option == "⚡ Smart Auto (Recommended)":
-    df = load_api()
-    if df.empty:
-        st.warning("API failed → switching to scraping")
-        df = load_scrape()
+    pred = model.predict([[soil, temp, rain]])[0]
+    crop = crop_map.get(pred, "Unknown")
 
-elif option == "🌐 Live Scraping (Experimental)":
-    df = load_scrape()
+    st.success(f"🌾 Recommended Crop: {crop}")
+
+st.markdown("---")
 
 # -------------------------
-# CHECK DATA
+# OPTIMIZATION (BALANCED)
 # -------------------------
-if df.empty:
-    st.error("❌ Data load nahi ho raha")
-    st.stop()
+if st.button("📊 Optimize Land"):
 
-# -------------------------
-# CLEAN DATA (API TYPE)
-# -------------------------
-if 'modal_price' in df.columns:
+    pred = model.predict([[soil, temp, rain]])[0]
 
-    df['modal_price'] = pd.to_numeric(df['modal_price'], errors='coerce')
-    df['arrival_date'] = pd.to_datetime(df['arrival_date'], errors='coerce')
+    # Profit per hectare (₹)
+    profit = [20000, 30000, 25000]
 
-    df = df.dropna(subset=['modal_price','arrival_date'])
+    # Cost per hectare (₹)
+    cost = [8000, 12000, 10000]
 
-    df['state'] = df['state'].astype(str).str.strip().str.title()
-    df['market'] = df['market'].astype(str).str.strip().str.title()
-    df['commodity'] = df['commodity'].astype(str).str.strip().str.lower()
+    # Net profit
+    net_profit = [p - c for p, c in zip(profit, cost)]
 
-    # SELECTORS
-    state = st.selectbox("🌍 State", sorted(df['state'].unique()))
-    df_state = df[df['state'] == state]
+    # Convert to minimization
+    c = [-x for x in net_profit]
 
-    mandi = st.selectbox("🏙 Mandi", sorted(df_state['market'].unique()))
-    df_mandi = df_state[df_state['market'] == mandi]
+    # Water usage (units)
+    water = [2, 5, 3]
 
-    crop = st.selectbox("🌾 Crop", ["Rice","Wheat","Bajra","Cotton"])
+    # Max demand (hectares limit)
+    demand = [land * 0.5, land * 0.6, land * 0.5]
 
-    mapping = {
-        "Rice": ["rice","paddy"],
-        "Wheat": ["wheat"],
-        "Bajra": ["bajra"],
-        "Cotton": ["cotton"]
-    }
+    # Constraints
+    A = [
+        [1, 1, 1],     # total land
+        water          # water constraint
+    ]
 
-    df_final = df_mandi[
-        df_mandi['commodity'].str.contains('|'.join(mapping[crop]), na=False)
-    ]
+    b = [
+        land,
+        300            # water limit
+    ]
 
-    # FALLBACK
-    if df_final.empty:
-        st.warning("Fallback to state data")
-        df_final = df_state[
-            df_state['commodity'].str.contains('|'.join(mapping[crop]), na=False)
-        ]
+    # Bounds (realistic farming)
+    bounds = [
+        (land*0.1, demand[0]),
+        (land*0.1, demand[1]),
+        (land*0.1, demand[2])
+    ]
 
-    if df_final.empty:
-        st.warning("Fallback to all India")
-        df_final = df[
-            df['commodity'].str.contains('|'.join(mapping[crop]), na=False)
-        ]
+    # ML boost
+    c[pred] -= 2000
 
-    df_final = df_final.sort_values('arrival_date')
+    res = linprog(c, A_ub=A, b_ub=b, bounds=bounds)
 
-    # -------------------------
-    # WEEKLY TREND
-    # -------------------------
-    st.markdown("---")
-    st.subheader("📈 Weekly Price Trend")
+    x = res.x
+    bajra, rice, wheat = x
 
-    df_weekly = df_final.set_index('arrival_date')['modal_price'].resample('W').mean().dropna()
+    st.success("💰 Profit Optimized Allocation:")
 
-    if len(df_weekly) > 1:
-        fig, ax = plt.subplots()
-        ax.plot(df_weekly.index, df_weekly.values, marker='o')
-        st.pyplot(fig)
-    else:
-        st.warning("Not enough data")
+    st.write(f"🌱 Bajra: {round(bajra,2)} ha")
+    st.write(f"🌾 Rice: {round(rice,2)} ha")
+    st.write(f"🌿 Wheat: {round(wheat,2)} ha")
 
-    # -------------------------
-    # FUTURE PREDICTION
-    # -------------------------
-    st.markdown("---")
-    st.subheader("🔮 Future Price Prediction")
+    total_profit = (
+        bajra * net_profit[0] +
+        rice * net_profit[1] +
+        wheat * net_profit[2]
+    )
 
-    if len(df_weekly) > 2:
-        df_temp = df_weekly.reset_index()
-        df_temp.columns = ['date','price']
+    st.metric("💰 Estimated Profit", f"₹ {int(total_profit)}")
 
-        df_temp['day'] = np.arange(len(df_temp))
+    # Bar chart
+    import matplotlib.pyplot as plt
+    crops = ["Bajra", "Rice", "Wheat"]
+    values = [bajra, rice, wheat]
 
-        model = LinearRegression()
-        model.fit(df_temp[['day']], df_temp['price'])
+    fig, ax = plt.subplots()
+    ax.bar(crops, values)
+    ax.set_title("Optimal Allocation")
 
-        future = np.arange(len(df_temp), len(df_temp)+7).reshape(-1,1)
-        preds = model.predict(future)
-
-        cols = st.columns(7)
-        for i,p in enumerate(preds):
-            cols[i].metric(f"Day {i+1}", f"₹ {round(p,2)}")
-
-    else:
-        st.warning("Not enough data")
-
-else:
-    st.info("Scraped data raw format (visualization coming soon)")
-    st.dataframe(df.head(20))
+    st.pyplot(fig)
