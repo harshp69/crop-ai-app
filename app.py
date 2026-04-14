@@ -59,7 +59,7 @@ with col1:
 
 with col2:
     temp = st.slider("🌡 Temperature", 0, 50, 25)
-    land = st.number_input("🌍 Total Land", value=100)
+    land = st.number_input("🌍 Total Land (hectares)", value=100)
 
 # -------------------------
 # CROP PREDICTION
@@ -110,62 +110,69 @@ API_KEY = "579b464db66ec23bdd0000018ebe52ae7ee2422652ff60fe57d186f1"
 @st.cache_data
 def load_data():
     url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&limit=10000"
-    
     try:
         res = requests.get(url, timeout=10)
         data = res.json()
-
-        if 'records' not in data:
-            return pd.DataFrame()
-
-        return pd.DataFrame(data['records'])
-
+        return pd.DataFrame(data.get('records', []))
     except:
         return pd.DataFrame()
 
 df = load_data()
 
 if df.empty:
-    st.error("❌ API se data nahi aa raha")
+    st.error("❌ API data load nahi hua")
     st.stop()
 
+# -------------------------
 # CLEAN DATA
+# -------------------------
 df['modal_price'] = pd.to_numeric(df['modal_price'], errors='coerce')
 df['arrival_date'] = pd.to_datetime(df['arrival_date'], errors='coerce')
 
 df = df.dropna(subset=['modal_price','arrival_date'])
 
-# NORMALIZE
-df['state'] = df['state'].astype(str).str.lower().str.strip()
-df['market'] = df['market'].astype(str).str.lower().str.strip()
-df['commodity'] = df['commodity'].astype(str).str.lower().str.strip()
+# -------------------------
+# CLEAN TEXT (IMPORTANT FIX)
+# -------------------------
+df['state_clean'] = df['state'].astype(str).str.strip().str.title()
+df['market_clean'] = df['market'].astype(str).str.strip().str.title()
+df['commodity_clean'] = df['commodity'].astype(str).str.strip().str.lower()
 
+# -------------------------
 # SELECTORS
-state = st.selectbox("🌍 State", sorted(df['state'].unique()))
-df_state = df[df['state'] == state]
+# -------------------------
+state = st.selectbox("🌍 State", sorted(df['state_clean'].unique()))
+df_state = df[df['state_clean'] == state]
 
-mandi = st.selectbox("🏙 Mandi", sorted(df_state['market'].unique()))
-df_mandi = df_state[df_state['market'] == mandi]
+mandi = st.selectbox("🏙 Mandi", sorted(df_state['market_clean'].unique()))
+df_mandi = df_state[df_state['market_clean'] == mandi]
 
 crop_option = st.selectbox("🌾 Crop", ["Rice","Wheat","Bajra","Cotton"])
 
 mapping = {
-    "Rice": ["rice","paddy"],
+    "Rice": ["rice","paddy","basmati"],
     "Wheat": ["wheat"],
-    "Bajra": ["bajra"],
+    "Bajra": ["bajra","pearl millet"],
     "Cotton": ["cotton"]
 }
 
 df_final = df_mandi[
-    df_mandi['commodity'].str.contains('|'.join(mapping[crop_option]), na=False)
+    df_mandi['commodity_clean'].str.contains('|'.join(mapping[crop_option]), na=False)
 ]
 
-# FALLBACK
+# -------------------------
+# 3 LEVEL FALLBACK
+# -------------------------
 if df_final.empty:
     st.warning("⚠️ Mandi data nahi mila → state data dikha rahe hain")
+    df_final = df_state[
+        df_state['commodity_clean'].str.contains('|'.join(mapping[crop_option]), na=False)
+    ]
+
+if df_final.empty:
+    st.warning("⚠️ State data bhi nahi mila → all India data dikha rahe hain")
     df_final = df[
-        (df['state'] == state) &
-        (df['commodity'].str.contains('|'.join(mapping[crop_option]), na=False))
+        df['commodity_clean'].str.contains('|'.join(mapping[crop_option]), na=False)
     ]
 
 df_final = df_final.sort_values('arrival_date')
