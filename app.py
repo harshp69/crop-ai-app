@@ -1,11 +1,11 @@
 import streamlit as st
 import joblib
-from scipy.optimize import linprog
 import matplotlib.pyplot as plt
 import requests
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
+from scipy.optimize import linprog
 
 # -------------------------
 # CONFIG
@@ -28,9 +28,6 @@ crop_map = {
 # PRICE PREDICTION FUNCTION
 # -------------------------
 def predict_price(df):
-    if len(df) < 3:
-        return None
-
     df = df.copy()
     df['day'] = np.arange(len(df))
 
@@ -45,7 +42,6 @@ def predict_price(df):
 # -------------------------
 st.title("🌾 Smart Crop AI")
 st.write("AI + Optimization System")
-
 st.markdown("---")
 
 # -------------------------
@@ -100,7 +96,7 @@ if st.button("📊 Optimize Land"):
     st.pyplot(fig)
 
 # -------------------------
-# MANDI SECTION
+# MANDI DATA
 # -------------------------
 st.markdown("---")
 st.header("📊 Live Mandi Price & Analysis")
@@ -109,7 +105,7 @@ API_KEY = "579b464db66ec23bdd0000018ebe52ae7ee2422652ff60fe57d186f1"
 
 @st.cache_data
 def load_data():
-    url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&limit=10000"
+    url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&limit=20000"
     try:
         res = requests.get(url, timeout=10)
         data = res.json()
@@ -131,12 +127,9 @@ df['arrival_date'] = pd.to_datetime(df['arrival_date'], errors='coerce')
 
 df = df.dropna(subset=['modal_price','arrival_date'])
 
-# -------------------------
-# CLEAN TEXT (IMPORTANT FIX)
-# -------------------------
 df['state_clean'] = df['state'].astype(str).str.strip().str.title()
 df['market_clean'] = df['market'].astype(str).str.strip().str.title()
-df['commodity_clean'] = df['commodity'].astype(str).str.strip().str.lower()
+df['commodity_clean'] = df['commodity'].astype(str).str.lower()
 
 # -------------------------
 # SELECTORS
@@ -152,65 +145,80 @@ crop_option = st.selectbox("🌾 Crop", ["Rice","Wheat","Bajra","Cotton"])
 mapping = {
     "Rice": ["rice","paddy","basmati"],
     "Wheat": ["wheat"],
-    "Bajra": ["bajra","pearl millet"],
+    "Bajra": ["bajra","pearl"],
     "Cotton": ["cotton"]
 }
 
+# -------------------------
+# FILTER DATA (STRONG MATCH)
+# -------------------------
+keywords = mapping[crop_option]
+
 df_final = df_mandi[
-    df_mandi['commodity_clean'].str.contains('|'.join(mapping[crop_option]), na=False)
+    df_mandi['commodity_clean'].apply(
+        lambda x: any(k in x for k in keywords)
+    )
 ]
 
-# -------------------------
-# 3 LEVEL FALLBACK
-# -------------------------
+# FALLBACK
 if df_final.empty:
-    st.warning("⚠️ Mandi data nahi mila → state data dikha rahe hain")
     df_final = df_state[
-        df_state['commodity_clean'].str.contains('|'.join(mapping[crop_option]), na=False)
+        df_state['commodity_clean'].apply(
+            lambda x: any(k in x for k in keywords)
+        )
     ]
 
 if df_final.empty:
-    st.warning("⚠️ State data bhi nahi mila → all India data dikha rahe hain")
     df_final = df[
-        df['commodity_clean'].str.contains('|'.join(mapping[crop_option]), na=False)
+        df['commodity_clean'].apply(
+            lambda x: any(k in x for k in keywords)
+        )
     ]
 
+# SORT + LAST 60 DAYS
 df_final = df_final.sort_values('arrival_date')
 
+latest_date = df_final['arrival_date'].max()
+df_final = df_final[df_final['arrival_date'] >= latest_date - pd.Timedelta(days=60)]
+
 # -------------------------
-# WEEKLY TREND SECTION
+# WEEKLY TREND
 # -------------------------
 st.markdown("---")
 st.subheader("📈 Weekly Price Trend")
 
-df_weekly = df_final.set_index('arrival_date')['modal_price'].resample('W').mean().dropna()
+df_daily = df_final.groupby('arrival_date')['modal_price'].mean()
+df_weekly = df_daily.rolling(7).mean().dropna()
 
-if len(df_weekly) > 1:
+if len(df_weekly) > 2:
     fig, ax = plt.subplots()
     ax.plot(df_weekly.index, df_weekly.values, marker='o')
-    ax.set_title("Weekly Price Trend")
+    ax.set_title("Weekly Trend (Smoothed)")
     ax.set_xlabel("Date")
     ax.set_ylabel("Price (₹)")
     plt.xticks(rotation=45)
     st.pyplot(fig)
 else:
-    st.warning("⚠️ Weekly trend ke liye data nahi hai")
+    st.warning("⚠️ Data kam hai")
 
 # -------------------------
-# FUTURE PREDICTION SECTION
+# FUTURE PREDICTION
 # -------------------------
 st.markdown("---")
 st.subheader("🔮 Future Price Prediction")
 
 if len(df_weekly) > 2:
     trend_df = df_weekly.reset_index()
-    trend_df.columns = ['arrival_date','modal_price']
+else:
+    trend_df = df_daily.reset_index()
 
+trend_df.columns = ['arrival_date','modal_price']
+
+if len(trend_df) > 3:
     preds = predict_price(trend_df)
 
-    if preds is not None:
-        cols = st.columns(7)
-        for i, p in enumerate(preds):
-            cols[i].metric(f"Day {i+1}", f"₹ {round(p,2)}")
+    cols = st.columns(7)
+    for i, p in enumerate(preds):
+        cols[i].metric(f"Day {i+1}", f"₹ {round(p,2)}")
 else:
-    st.warning("⚠️ Prediction ke liye enough data nahi")
+    st.warning("⚠️ Prediction ke liye data kam hai")
