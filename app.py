@@ -1,11 +1,11 @@
 import streamlit as st
 import joblib
+from scipy.optimize import linprog
 import matplotlib.pyplot as plt
 import requests
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
-from scipy.optimize import linprog
 
 # -------------------------
 # CONFIG
@@ -15,7 +15,10 @@ st.set_page_config(page_title="Smart Crop AI", layout="centered")
 # -------------------------
 # LOAD MODEL
 # -------------------------
-model = joblib.load("crop_model.pkl")
+try:
+    model = joblib.load("crop_model.pkl")
+except:
+    model = None
 
 crop_map = {
     0: "Bajra 🌱",
@@ -28,6 +31,9 @@ crop_map = {
 # PRICE PREDICTION FUNCTION
 # -------------------------
 def predict_price(df):
+    if len(df) < 3:
+        return None
+
     df = df.copy()
     df['day'] = np.arange(len(df))
 
@@ -41,7 +47,8 @@ def predict_price(df):
 # HEADER
 # -------------------------
 st.title("🌾 Smart Crop AI")
-st.write("AI + Optimization System")
+st.write("AI + Optimization + Mandi Intelligence")
+
 st.markdown("---")
 
 # -------------------------
@@ -61,15 +68,16 @@ with col2:
 # CROP PREDICTION
 # -------------------------
 if st.button("🚀 Predict Crop"):
-    pred = model.predict([[soil, temp, rain]])[0]
-    st.success(f"🌾 Recommended Crop: {crop_map[pred]}")
+    if model:
+        pred = model.predict([[soil, temp, rain]])[0]
+        st.success(f"🌾 Recommended Crop: {crop_map[pred]}")
+    else:
+        st.warning("Model file missing (crop_model.pkl)")
 
 # -------------------------
 # LAND OPTIMIZATION
 # -------------------------
 if st.button("📊 Optimize Land"):
-    st.subheader("📊 Optimize Land")
-
     profit = [20000, 30000, 25000, 35000]
     cost   = [8000, 12000, 10000, 15000]
     net_profit = [p - c for p, c in zip(profit, cost)]
@@ -92,7 +100,6 @@ if st.button("📊 Optimize Land"):
 
     fig, ax = plt.subplots()
     ax.bar(crops, values)
-    ax.set_title("Optimal Land Distribution")
     st.pyplot(fig)
 
 # -------------------------
@@ -106,18 +113,38 @@ API_KEY = "579b464db66ec23bdd0000018ebe52ae7ee2422652ff60fe57d186f1"
 @st.cache_data
 def load_data():
     url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&limit=20000"
+
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=20)
+
+        if res.status_code != 200:
+            return pd.DataFrame()
+
         data = res.json()
-        return pd.DataFrame(data.get('records', []))
+
+        if 'records' not in data:
+            return pd.DataFrame()
+
+        return pd.DataFrame(data['records'])
+
     except:
         return pd.DataFrame()
 
 df = load_data()
 
+# -------------------------
+# FALLBACK DATA
+# -------------------------
 if df.empty:
-    st.error("❌ API data load nahi hua")
-    st.stop()
+    st.warning("⚠️ Live API fail → sample data use ho raha hai")
+
+    df = pd.DataFrame({
+        "state": ["Maharashtra"]*30,
+        "market": ["Nagpur"]*30,
+        "commodity": ["wheat"]*30,
+        "modal_price": np.random.randint(2000,3000,30),
+        "arrival_date": pd.date_range(end=pd.Timestamp.today(), periods=30)
+    })
 
 # -------------------------
 # CLEAN DATA
@@ -145,66 +172,57 @@ crop_option = st.selectbox("🌾 Crop", ["Rice","Wheat","Bajra","Cotton"])
 mapping = {
     "Rice": ["rice","paddy","basmati"],
     "Wheat": ["wheat"],
-    "Bajra": ["bajra","pearl"],
+    "Bajra": ["bajra","pearl millet"],
     "Cotton": ["cotton"]
 }
 
-# -------------------------
-# FILTER DATA (STRONG MATCH)
-# -------------------------
 keywords = mapping[crop_option]
 
 df_final = df_mandi[
-    df_mandi['commodity_clean'].apply(
-        lambda x: any(k in x for k in keywords)
-    )
+    df_mandi['commodity_clean'].apply(lambda x: any(k in x for k in keywords))
 ]
 
-# FALLBACK
+# fallback
 if df_final.empty:
     df_final = df_state[
-        df_state['commodity_clean'].apply(
-            lambda x: any(k in x for k in keywords)
-        )
+        df_state['commodity_clean'].apply(lambda x: any(k in x for k in keywords))
     ]
 
 if df_final.empty:
     df_final = df[
-        df['commodity_clean'].apply(
-            lambda x: any(k in x for k in keywords)
-        )
+        df['commodity_clean'].apply(lambda x: any(k in x for k in keywords))
     ]
 
-# SORT + LAST 60 DAYS
-df_final = df_final.sort_values('arrival_date')
-
+# -------------------------
+# LAST 60 DAYS FILTER
+# -------------------------
 latest_date = df_final['arrival_date'].max()
 df_final = df_final[df_final['arrival_date'] >= latest_date - pd.Timedelta(days=60)]
+
+df_final = df_final.sort_values('arrival_date')
 
 # -------------------------
 # WEEKLY TREND
 # -------------------------
-st.markdown("---")
 st.subheader("📈 Weekly Price Trend")
 
 df_daily = df_final.groupby('arrival_date')['modal_price'].mean()
+
 df_weekly = df_daily.rolling(7).mean().dropna()
 
-if len(df_weekly) > 2:
+if len(df_weekly) > 1:
     fig, ax = plt.subplots()
     ax.plot(df_weekly.index, df_weekly.values, marker='o')
-    ax.set_title("Weekly Trend (Smoothed)")
     ax.set_xlabel("Date")
-    ax.set_ylabel("Price (₹)")
+    ax.set_ylabel("Price")
     plt.xticks(rotation=45)
     st.pyplot(fig)
 else:
-    st.warning("⚠️ Data kam hai")
+    st.warning("⚠️ Trend data insufficient")
 
 # -------------------------
 # FUTURE PREDICTION
 # -------------------------
-st.markdown("---")
 st.subheader("🔮 Future Price Prediction")
 
 if len(df_weekly) > 2:
@@ -214,9 +232,9 @@ else:
 
 trend_df.columns = ['arrival_date','modal_price']
 
-if len(trend_df) > 3:
-    preds = predict_price(trend_df)
+preds = predict_price(trend_df)
 
+if preds is not None:
     cols = st.columns(7)
     for i, p in enumerate(preds):
         cols[i].metric(f"Day {i+1}", f"₹ {round(p,2)}")
