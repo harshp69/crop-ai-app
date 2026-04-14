@@ -8,6 +8,11 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 
 # -------------------------
+# CONFIG
+# -------------------------
+st.set_page_config(page_title="Smart Crop AI", layout="centered")
+
+# -------------------------
 # LOAD MODEL
 # -------------------------
 model = joblib.load("crop_model.pkl")
@@ -23,32 +28,29 @@ crop_map = {
 # PRICE PREDICTION FUNCTION
 # -------------------------
 def predict_price(df):
-    df = df[['arrival_date', 'modal_price']].copy()
-    df['arrival_date'] = pd.to_datetime(df['arrival_date'])
-    df = df.sort_values('arrival_date')
+    if len(df) < 3:
+        return None
 
+    df = df.copy()
     df['day'] = np.arange(len(df))
 
-    X = df[['day']]
-    y = df['modal_price']
-
     model_lr = LinearRegression()
-    model_lr.fit(X, y)
+    model_lr.fit(df[['day']], df['modal_price'])
 
     future_days = np.arange(len(df), len(df)+7).reshape(-1,1)
     return model_lr.predict(future_days)
 
 # -------------------------
-# UI
+# HEADER
 # -------------------------
-st.set_page_config(page_title="Smart Crop AI", layout="centered")
-
 st.title("🌾 Smart Crop AI")
 st.write("AI + Optimization System")
 
 st.markdown("---")
 
+# -------------------------
 # INPUTS
+# -------------------------
 col1, col2 = st.columns(2)
 
 with col1:
@@ -57,28 +59,19 @@ with col1:
 
 with col2:
     temp = st.slider("🌡 Temperature", 0, 50, 25)
-    land = st.number_input("🌍 Total Land (hectares)", value=100)
-
-# BUTTONS
-c1, c2 = st.columns(2)
-
-with c1:
-    predict_btn = st.button("🚀 Predict Crop")
-
-with c2:
-    optimize_btn = st.button("📊 Optimize Land")
+    land = st.number_input("🌍 Total Land", value=100)
 
 # -------------------------
 # CROP PREDICTION
 # -------------------------
-if predict_btn:
+if st.button("🚀 Predict Crop"):
     pred = model.predict([[soil, temp, rain]])[0]
     st.success(f"🌾 Recommended Crop: {crop_map[pred]}")
 
 # -------------------------
-# OPTIMIZATION
+# LAND OPTIMIZATION
 # -------------------------
-if optimize_btn:
+if st.button("📊 Optimize Land"):
     st.subheader("📊 Optimize Land")
 
     profit = [20000, 30000, 25000, 35000]
@@ -112,27 +105,42 @@ if optimize_btn:
 st.markdown("---")
 st.header("📊 Live Mandi Price & Analysis")
 
-API_KEY = "YOUR_API_KEY"
+API_KEY = "579b464db66ec23bdd0000018ebe52ae7ee2422652ff60fe57d186f1"
 
 @st.cache_data
 def load_data():
     url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&limit=10000"
-    data = requests.get(url).json()
-    return pd.DataFrame(data['records'])
+    
+    try:
+        res = requests.get(url, timeout=10)
+        data = res.json()
+
+        if 'records' not in data:
+            return pd.DataFrame()
+
+        return pd.DataFrame(data['records'])
+
+    except:
+        return pd.DataFrame()
 
 df = load_data()
 
-# CLEAN
+if df.empty:
+    st.error("❌ API se data nahi aa raha")
+    st.stop()
+
+# CLEAN DATA
 df['modal_price'] = pd.to_numeric(df['modal_price'], errors='coerce')
 df['arrival_date'] = pd.to_datetime(df['arrival_date'], errors='coerce')
-df = df.dropna()
+
+df = df.dropna(subset=['modal_price','arrival_date'])
 
 # NORMALIZE
-df['state'] = df['state'].str.lower().str.strip()
-df['market'] = df['market'].str.lower().str.strip()
-df['commodity'] = df['commodity'].str.lower().str.strip()
+df['state'] = df['state'].astype(str).str.lower().str.strip()
+df['market'] = df['market'].astype(str).str.lower().str.strip()
+df['commodity'] = df['commodity'].astype(str).str.lower().str.strip()
 
-# SELECT
+# SELECTORS
 state = st.selectbox("🌍 State", sorted(df['state'].unique()))
 df_state = df[df['state'] == state]
 
@@ -154,7 +162,7 @@ df_final = df_mandi[
 
 # FALLBACK
 if df_final.empty:
-    st.warning("⚠️ Exact mandi data nahi mila, state level data dikha rahe hain")
+    st.warning("⚠️ Mandi data nahi mila → state data dikha rahe hain")
     df_final = df[
         (df['state'] == state) &
         (df['commodity'].str.contains('|'.join(mapping[crop_option]), na=False))
@@ -163,12 +171,12 @@ if df_final.empty:
 df_final = df_final.sort_values('arrival_date')
 
 # -------------------------
-# SECTION 1: WEEKLY TREND
+# WEEKLY TREND SECTION
 # -------------------------
 st.markdown("---")
 st.subheader("📈 Weekly Price Trend")
 
-df_weekly = df_final.set_index('arrival_date').resample('W')['modal_price'].mean().dropna()
+df_weekly = df_final.set_index('arrival_date')['modal_price'].resample('W').mean().dropna()
 
 if len(df_weekly) > 1:
     fig, ax = plt.subplots()
@@ -177,23 +185,25 @@ if len(df_weekly) > 1:
     ax.set_xlabel("Date")
     ax.set_ylabel("Price (₹)")
     plt.xticks(rotation=45)
-
     st.pyplot(fig)
 else:
-    st.warning("Not enough data")
+    st.warning("⚠️ Weekly trend ke liye data nahi hai")
 
 # -------------------------
-# SECTION 2: FUTURE PREDICTION
+# FUTURE PREDICTION SECTION
 # -------------------------
 st.markdown("---")
 st.subheader("🔮 Future Price Prediction")
 
 if len(df_weekly) > 2:
     trend_df = df_weekly.reset_index()
+    trend_df.columns = ['arrival_date','modal_price']
+
     preds = predict_price(trend_df)
 
-    cols = st.columns(7)
-    for i, p in enumerate(preds):
-        cols[i].metric(f"Day {i+1}", f"₹ {round(p,2)}")
+    if preds is not None:
+        cols = st.columns(7)
+        for i, p in enumerate(preds):
+            cols[i].metric(f"Day {i+1}", f"₹ {round(p,2)}")
 else:
-    st.warning("Not enough data for prediction")
+    st.warning("⚠️ Prediction ke liye enough data nahi")
