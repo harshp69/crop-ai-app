@@ -3,6 +3,6 @@ pandas
 numpy
 matplotlib
 scikit-learn
-scipy
-joblib
 requests
+beautifulsoup4
+lxml
