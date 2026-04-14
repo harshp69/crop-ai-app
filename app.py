@@ -19,7 +19,7 @@ crop_map = {
 }
 
 # -------------------------
-# PRICE PREDICTION
+# PRICE PREDICTION FUNCTION
 # -------------------------
 def predict_price(df):
     df = df[['arrival_date', 'modal_price']].copy()
@@ -119,7 +119,7 @@ if st.session_state.show_opt:
     st.write(f"🌿 Wheat: {round(wheat,2)} ha")
     st.write(f"🧵 Cotton: {round(cotton,2)} ha")
 
-    # GRAPH (RESTORED ✅)
+    # GRAPH
     crops = ["Bajra", "Rice", "Wheat", "Cotton"]
     values = [bajra, rice, wheat, cotton]
 
@@ -129,7 +129,7 @@ if st.session_state.show_opt:
     st.pyplot(fig)
 
 # -------------------------
-# MANDI SECTION
+# MANDI SECTION (FINAL FIX)
 # -------------------------
 st.markdown("---")
 st.header("📊 Live Mandi Price & Analysis")
@@ -138,18 +138,25 @@ API_KEY = "579b464db66ec23bdd0000018ebe52ae7ee2422652ff60fe57d186f1"
 
 @st.cache_data
 def load_data():
-    url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&limit=2000"
-    return pd.DataFrame(requests.get(url).json()['records'])
+    url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&limit=5000"
+    data = requests.get(url).json()
+    return pd.DataFrame(data['records'])
 
-df = load_data().dropna()
+df = load_data()
 
-state = st.selectbox("State", sorted(df['state'].unique()))
+# CLEAN DATA
+df['modal_price'] = pd.to_numeric(df['modal_price'], errors='coerce')
+df['arrival_date'] = pd.to_datetime(df['arrival_date'], errors='coerce')
+df = df.dropna(subset=['modal_price','arrival_date'])
+
+# SELECT
+state = st.selectbox("🌍 State", sorted(df['state'].dropna().unique()))
 df_state = df[df['state'] == state]
 
-mandi = st.selectbox("Mandi", sorted(df_state['market'].unique()))
+mandi = st.selectbox("🏙 Mandi", sorted(df_state['market'].dropna().unique()))
 df_mandi = df_state[df_state['market'] == mandi]
 
-crop_option = st.selectbox("Crop", ["Rice","Wheat","Bajra","Cotton"])
+crop_option = st.selectbox("🌾 Crop", ["Rice","Wheat","Bajra","Cotton"])
 
 mapping = {
     "Rice":["Rice","Paddy"],
@@ -163,19 +170,29 @@ df_final = df_mandi[
 ]
 
 if df_final.empty:
-    st.warning("No data available")
+    st.warning("No data found for this crop")
 else:
-    df_final['arrival_date'] = pd.to_datetime(df_final['arrival_date'], errors='coerce')
-    df_final['modal_price'] = pd.to_numeric(df_final['modal_price'], errors='coerce')
-    df_final = df_final.dropna().sort_values('arrival_date')
 
-    # PRICE TREND ✅
-    st.subheader("📈 Price Trend")
-    st.line_chart(df_final.set_index('arrival_date')['modal_price'])
+    df_final = df_final.sort_values('arrival_date')
 
-    # FUTURE PREDICTION ✅
+    # WEEKLY TREND
+    df_weekly = df_final.set_index('arrival_date').resample('W').mean()
+    df_weekly = df_weekly.dropna()
+
+    st.subheader("📈 Price Trend (Weekly)")
+
+    fig, ax = plt.subplots()
+    ax.plot(df_weekly.index, df_weekly['modal_price'], marker='o')
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Price (₹)")
+    ax.set_title("Weekly Price Trend")
+    plt.xticks(rotation=45)
+
+    st.pyplot(fig)
+
+    # PREDICTION
     st.subheader("🔮 Future Price (Next 7 Days)")
-    preds = predict_price(df_final)
+    preds = predict_price(df_weekly.reset_index())
 
     for i, p in enumerate(preds):
         st.metric(f"Day {i+1}", f"₹ {round(p,2)}")
